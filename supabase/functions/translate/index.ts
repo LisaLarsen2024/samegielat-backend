@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const APERTIUM = "https://apertium.org/apy";
-const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localhost:4173","https://samegielat.surge.sh"];
+const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localhost:4173","https://samegielat.surge.sh","https://samegielat.vercel.app"];
 const PAIRS = new Set(["sme|nob","nob|sme","sme|smj","smj|sme","sme|sma","sma|sme"]);
 
 const rateMap = new Map<string, { c: number; r: number }>();

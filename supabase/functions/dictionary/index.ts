@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localhost:4173","https://samegielat.surge.sh"];
+const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localhost:4173","https://samegielat.surge.sh","https://samegielat.vercel.app"];
 const POS: Record<string, string> = { n:"substantiv", v:"verb", vblex:"verb", adj:"adjektiv", adv:"adverb", pr:"preposisjon", prn:"pronomen", det:"determinativ", cnjcoo:"konjunksjon", cnjsub:"subjunksjon", ij:"interjeksjon", num:"tallord", np:"egennavn" };
 
 function cors(o: string) {

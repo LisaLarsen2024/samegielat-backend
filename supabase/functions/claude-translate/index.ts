@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localhost:4173","http://localhost:5177","http://localhost:5178","https://samegielat.surge.sh"];
+const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localhost:4173","http://localhost:5177","http://localhost:5178","https://samegielat.surge.sh","https://samegielat.vercel.app"];
 const VALID_LANGS = new Set(["sme","smj","sma"]);
 const LANG_NAMES: Record<string,string> = { sme:"nordsamisk (davvisámegiella)", smj:"lulesamisk (julevsámegiella)", sma:"sørsamisk (åarjelsaemien gïele)" };
 
