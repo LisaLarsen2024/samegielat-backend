@@ -4,37 +4,10 @@ const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localho
 const VALID_LANGS = new Set(["sme","smj","sma"]);
 const LANG_NAMES: Record<string,string> = { sme:"nordsamisk (davvisámegiella)", smj:"lulesamisk (julevsámegiella)", sma:"sørsamisk (åarjelsaemien gïele)" };
 
-// Anchor-eksempler for de vanligste hilsenene. Disse legges ALLTID inn i prompten
-// så modellen ikke gjetter feil på korte, hverdagslige uttrykk.
-const ANCHORS: Record<string, Array<[string, string]>> = {
-  sme: [
-    ["Hei", "Bures"],
-    ["God morgen", "Buorre iđit"],
-    ["God dag", "Buorre beaivi"],
-    ["God kveld", "Buorre eahket"],
-    ["Takk", "Giitu"],
-    ["Ha det", "Báze dearvan"],
-    ["Velkommen", "Buorre boahtin"],
-    ["Ja", "Juo"],
-    ["Nei", "Ii"],
-    ["Jeg heter", "Mu namma lea"],
-  ],
-  smj: [
-    ["Hei", "Buoris"],
-    ["God morgen", "Buorre iđet"],
-    ["God dag", "Buorre biejvve"],
-    ["Takk", "Giihtu"],
-    ["Ja", "Juo"],
-    ["Nei", "Ij"],
-  ],
-  sma: [
-    ["Hei", "Buaregh"],
-    ["God dag", "Buerie biejjie"],
-    ["Takk", "Gæjhtoe"],
-    ["Ja", "Jaavoe"],
-    ["Nei", "Ij"],
-  ],
-};
+// MERK: Vi bruker IKKE hardkodede anchor-eksempler skapt av AI. All "ground truth"
+// hentes dynamisk fra dictionary-tabellen (GiellaLT/Apertium-data) ved hver request,
+// så modellen kun ser verifiserte par fra autoritative kilder.
+// For nob→smj og nob→sma finnes ingen direkte par i dict — kun via sme.
 
 const rateMap = new Map<string,{c:number;r:number}>();
 
@@ -63,10 +36,76 @@ Deno.serve(async(req)=>{
   const apiKey=Deno.env.get("ANTHROPIC_API_KEY");
   if(!apiKey)return json({error:"API key not configured"},500,origin);
 
-  // Fetch examples from translation memory
   const sb=createClient(Deno.env.get("SUPABASE_URL")!,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const langName=LANG_NAMES[targetLang];
 
-  let examples="";
+  // ─── 1. DICTIONARY-OPPSLAG på input-ord (verifiserte ord-par) ──────────
+  // Splitt input i ord, slå opp i dictionary (GiellaLT/Apertium), bygg
+  // garantert sann kontekst fra Lisas egne datasett.
+  const words = text.toLowerCase()
+    .replace(/[^\p{L}\s-]/gu, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 1 && w.length < 30)
+    .slice(0, 20);
+
+  let dictAnchors = "";
+  if (words.length > 0) {
+    try {
+      // Step 1: nob → sme (vi har 87k par direkte)
+      const { data: nob2sme } = await sb.from("dictionary")
+        .select("source_word, target_word")
+        .eq("source_lang", "nob")
+        .eq("target_lang", "sme")
+        .in("source_word_lower", words)
+        .limit(40);
+
+      if (nob2sme && nob2sme.length > 0) {
+        // Dedupliser per source_word, behold første variant
+        const seen = new Set<string>();
+        const unique = nob2sme.filter((p: {source_word: string; target_word: string}) => {
+          const k = p.source_word.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k); return true;
+        });
+
+        if (targetLang === "sme") {
+          // Direkte: vi har nob→sme i hånda
+          dictAnchors = unique
+            .map((p: {source_word: string; target_word: string}) =>
+              `Norsk: ${p.source_word}\n${langName}: ${p.target_word}`)
+            .join("\n");
+        } else {
+          // Bro via nordsamisk: nob→sme→smj/sma
+          const smeWords = unique.map((p: {target_word: string}) =>
+            p.target_word.toLowerCase());
+          const { data: sme2tgt } = await sb.from("dictionary")
+            .select("source_word, target_word")
+            .eq("source_lang", "sme")
+            .eq("target_lang", targetLang)
+            .in("source_word_lower", smeWords)
+            .limit(40);
+
+          if (sme2tgt && sme2tgt.length > 0) {
+            const bridgeMap = new Map<string, string>();
+            for (const p of sme2tgt) {
+              const k = p.source_word.toLowerCase();
+              if (!bridgeMap.has(k)) bridgeMap.set(k, p.target_word);
+            }
+            const bridged = unique
+              .map((p: {source_word: string; target_word: string}) => {
+                const tgt = bridgeMap.get(p.target_word.toLowerCase());
+                return tgt ? `Norsk: ${p.source_word}\n${langName}: ${tgt}` : null;
+              })
+              .filter((x: string | null) => x !== null);
+            dictAnchors = bridged.join("\n");
+          }
+        }
+      }
+    } catch(e) { console.error("Dict lookup error:", e); }
+  }
+
+  // ─── 2. TRANSLATION MEMORY: lange offisielle setninger som ekstra kontekst ──
+  let tmExamples = "";
   try{
     const{data}=await sb.from("translation_memory")
       .select("source_text,target_text")
@@ -75,11 +114,10 @@ Deno.serve(async(req)=>{
       .limit(40);
 
     if(data&&data.length>0){
-      examples=data.map((p:{source_text:string;target_text:string})=>
-        `Norsk: ${p.source_text}\n${LANG_NAMES[targetLang]}: ${p.target_text}`
+      tmExamples=data.map((p:{source_text:string;target_text:string})=>
+        `Norsk: ${p.source_text}\n${langName}: ${p.target_text}`
       ).join("\n");
     }else{
-      // Try reverse direction pairs
       const{data:rev}=await sb.from("translation_memory")
         .select("source_text,target_text")
         .eq("source_lang",targetLang)
@@ -87,34 +125,28 @@ Deno.serve(async(req)=>{
         .limit(40);
 
       if(rev&&rev.length>0){
-        examples=rev.map((p:{source_text:string;target_text:string})=>
-          `Norsk: ${p.target_text}\n${LANG_NAMES[targetLang]}: ${p.source_text}`
+        tmExamples=rev.map((p:{source_text:string;target_text:string})=>
+          `Norsk: ${p.target_text}\n${langName}: ${p.source_text}`
         ).join("\n");
       }
     }
   }catch(e){console.error("TMX fetch error:",e);}
 
-  const langName=LANG_NAMES[targetLang];
-
-  // Bygg anchor-eksempler først (vanlige hilsener), så TM-eksempler fra DB
-  const anchorPairs = ANCHORS[targetLang] || [];
-  const anchorText = anchorPairs
-    .map(([no, sa]) => `Norsk: ${no}\n${langName}: ${sa}`)
-    .join("\n");
-  const allExamples = examples
-    ? `${anchorText}\n${examples}`
-    : anchorText;
+  // Bygg samlet kontekst: dict (verifiserte ord) FØRST, så TM (lange setninger)
+  const allExamples = [dictAnchors, tmExamples].filter(s => s.length > 0).join("\n");
 
   const prompt=`Du er en ekspert oversetter fra norsk til ${langName}.
 
 VIKTIGE REGLER:
 - Svar KUN på ${langName}. Bruk ALDRI finsk, svensk, engelsk eller norsk i oversettelsen.
 - ${langName.split(" ")[0]} er et samisk språk — ikke bland med finsk eller andre nordiske språk.
+- Eksemplene under er hentet direkte fra autoritative kilder: GiellaLT (UiT Norges arktiske universitet), Apertium åpne ordbøker, og offisielle Sametings-tekster. Behandle dem som ground truth.
+- Hvis input-ord finnes blant ordbok-eksemplene, BRUK den verifiserte oversettelsen.
 - Hvis du er usikker på oversettelsen, skriv "Usikker oversettelse — sjekk med samiskspråklig" istedenfor å gjette.
 - Bruk standard, daglig språkbruk. Ikke arkaisk eller overformelt.
 - Svar KUN med oversettelsen, ingen forklaringer, ingen anførselstegn.
 
-Korrekte oversettelses-eksempler:
+Verifiserte eksempler fra ordbøker og parallelle korpus:
 
 ${allExamples}
 
