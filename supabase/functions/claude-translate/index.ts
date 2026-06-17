@@ -4,6 +4,38 @@ const ORIGINS = ["http://localhost:5173","http://localhost:3000","http://localho
 const VALID_LANGS = new Set(["sme","smj","sma"]);
 const LANG_NAMES: Record<string,string> = { sme:"nordsamisk (davvisámegiella)", smj:"lulesamisk (julevsámegiella)", sma:"sørsamisk (åarjelsaemien gïele)" };
 
+// Anchor-eksempler for de vanligste hilsenene. Disse legges ALLTID inn i prompten
+// så modellen ikke gjetter feil på korte, hverdagslige uttrykk.
+const ANCHORS: Record<string, Array<[string, string]>> = {
+  sme: [
+    ["Hei", "Bures"],
+    ["God morgen", "Buorre iđit"],
+    ["God dag", "Buorre beaivi"],
+    ["God kveld", "Buorre eahket"],
+    ["Takk", "Giitu"],
+    ["Ha det", "Báze dearvan"],
+    ["Velkommen", "Buorre boahtin"],
+    ["Ja", "Juo"],
+    ["Nei", "Ii"],
+    ["Jeg heter", "Mu namma lea"],
+  ],
+  smj: [
+    ["Hei", "Buoris"],
+    ["God morgen", "Buorre iđet"],
+    ["God dag", "Buorre biejvve"],
+    ["Takk", "Giihtu"],
+    ["Ja", "Juo"],
+    ["Nei", "Ij"],
+  ],
+  sma: [
+    ["Hei", "Buaregh"],
+    ["God dag", "Buerie biejjie"],
+    ["Takk", "Gæjhtoe"],
+    ["Ja", "Jaavoe"],
+    ["Nei", "Ij"],
+  ],
+};
+
 const rateMap = new Map<string,{c:number;r:number}>();
 
 function cors(o:string){return{"Access-Control-Allow-Origin":ORIGINS.includes(o)?o:"","Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type, Authorization, x-client-info, apikey"};}
@@ -63,21 +95,30 @@ Deno.serve(async(req)=>{
   }catch(e){console.error("TMX fetch error:",e);}
 
   const langName=LANG_NAMES[targetLang];
-  const prompt=examples
-    ?`Du er en ekspert oversetter fra norsk til ${langName}.
 
-Her er eksempler på korrekte oversettelser:
+  // Bygg anchor-eksempler først (vanlige hilsener), så TM-eksempler fra DB
+  const anchorPairs = ANCHORS[targetLang] || [];
+  const anchorText = anchorPairs
+    .map(([no, sa]) => `Norsk: ${no}\n${langName}: ${sa}`)
+    .join("\n");
+  const allExamples = examples
+    ? `${anchorText}\n${examples}`
+    : anchorText;
 
-${examples}
+  const prompt=`Du er en ekspert oversetter fra norsk til ${langName}.
 
-Oversett nå denne teksten til ${langName}.
-Svar KUN med oversettelsen, ingenting annet. Ingen forklaringer, ingen anførselstegn, bare den oversatte teksten.
+VIKTIGE REGLER:
+- Svar KUN på ${langName}. Bruk ALDRI finsk, svensk, engelsk eller norsk i oversettelsen.
+- ${langName.split(" ")[0]} er et samisk språk — ikke bland med finsk eller andre nordiske språk.
+- Hvis du er usikker på oversettelsen, skriv "Usikker oversettelse — sjekk med samiskspråklig" istedenfor å gjette.
+- Bruk standard, daglig språkbruk. Ikke arkaisk eller overformelt.
+- Svar KUN med oversettelsen, ingen forklaringer, ingen anførselstegn.
 
-Norsk: ${text.trim()}
-${langName}:`
-    :`Du er en ekspert oversetter fra norsk til ${langName}.
-Oversett denne teksten til ${langName}.
-Svar KUN med oversettelsen, ingenting annet.
+Korrekte oversettelses-eksempler:
+
+${allExamples}
+
+Oversett nå denne teksten:
 
 Norsk: ${text.trim()}
 ${langName}:`;
