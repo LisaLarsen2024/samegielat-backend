@@ -105,16 +105,32 @@ Deno.serve(async(req)=>{
   }
 
   // ─── 2. TRANSLATION MEMORY: lange offisielle setninger som ekstra kontekst ──
+  // VIKTIG: De første ID-radene (~< 5000) er stort sett metadata/header-støy
+  // ("no.", "12", telefonnumre etc). Vi hopper dem over og post-filtrerer for
+  // å fjerne identiske source==target og veldig korte rader.
+  const cleanTM = (rows: Array<{source_text: string; target_text: string}>) =>
+    rows.filter(p => {
+      const s = (p.source_text || "").trim();
+      const t = (p.target_text || "").trim();
+      if (!s || !t) return false;
+      if (s === t) return false;                    // ikke ekte oversettelse
+      if (s.length < 5 || t.length < 5) return false; // for korte til å lære av
+      if (/^[\d\s\-+.,()]+$/.test(s)) return false;  // bare tall/symboler
+      return true;
+    }).slice(0, 30);
+
   let tmExamples = "";
   try{
     const{data}=await sb.from("translation_memory")
       .select("source_text,target_text")
       .eq("source_lang","nob")
       .eq("target_lang",targetLang)
-      .limit(40);
+      .gt("id", 5000)
+      .limit(100);
 
-    if(data&&data.length>0){
-      tmExamples=data.map((p:{source_text:string;target_text:string})=>
+    const cleaned = cleanTM(data || []);
+    if(cleaned.length > 0){
+      tmExamples=cleaned.map((p)=>
         `Norsk: ${p.source_text}\n${langName}: ${p.target_text}`
       ).join("\n");
     }else{
@@ -122,10 +138,12 @@ Deno.serve(async(req)=>{
         .select("source_text,target_text")
         .eq("source_lang",targetLang)
         .eq("target_lang","nob")
-        .limit(40);
+        .gt("id", 5000)
+        .limit(100);
 
-      if(rev&&rev.length>0){
-        tmExamples=rev.map((p:{source_text:string;target_text:string})=>
+      const cleanedRev = cleanTM(rev || []);
+      if(cleanedRev.length > 0){
+        tmExamples=cleanedRev.map((p)=>
           `Norsk: ${p.target_text}\n${langName}: ${p.source_text}`
         ).join("\n");
       }
